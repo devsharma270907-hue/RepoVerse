@@ -1,0 +1,616 @@
+{
+  "info": {
+    "_postman_id": "b7c1f5d2-6a4e-4f3b-9a11-2d8c0e6f71aa",
+    "name": "RepoVerse API",
+    "description": "RepoVerse backend — auth/sessions, users & data control, GitHub discovery, repos, workspace views/pins/reports, graph navigation, insights and AI.\n\nSet the environment's baseUrl, email, password and repoUrl, then run requests top to bottom. Dynamic values (accessToken, repoId, analysisId, viewId, pinId, sessionId) are saved automatically by test scripts. The refresh cookie is stored by Postman's cookie jar.\n\nDestructive requests are marked in their descriptions (account deletion, repo deletion, revoking all sessions).",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {
+    "type": "bearer",
+    "bearer": [
+      {
+        "key": "token",
+        "value": "{{accessToken}}",
+        "type": "string"
+      }
+    ]
+  },
+  "variable": [
+    { "key": "accessToken", "value": "" },
+    { "key": "userId", "value": "" },
+    { "key": "repoId", "value": "" },
+    { "key": "analysisId", "value": "" },
+    { "key": "viewId", "value": "" },
+    { "key": "pinId", "value": "" },
+    { "key": "sessionId", "value": "" }
+  ],
+  "item": [
+    {
+      "name": "Auth",
+      "item": [
+        {
+          "name": "Register",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const json = pm.response.json();",
+                  "pm.test('201 created', () => pm.response.to.have.status(201));",
+                  "if (json.success && json.data) {",
+                  "  pm.environment.set('accessToken', json.data.accessToken);",
+                  "  if (json.data.user) pm.environment.set('userId', json.data.user.id);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"{{name}}\",\n  \"email\": \"{{email}}\",\n  \"password\": \"{{password}}\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": "{{baseUrl}}/api/v1/auth/register",
+            "description": "Creates the account and sets the refresh cookie. Saves accessToken and userId."
+          }
+        },
+        {
+          "name": "Login",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const json = pm.response.json();",
+                  "pm.test('200 ok', () => pm.response.to.have.status(200));",
+                  "if (json.success && json.data) {",
+                  "  pm.environment.set('accessToken', json.data.accessToken);",
+                  "  if (json.data.user) pm.environment.set('userId', json.data.user.id);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{email}}\",\n  \"password\": \"{{password}}\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": "{{baseUrl}}/api/v1/auth/login",
+            "description": "Five failed logins within 15 minutes lock the email (429 ACCOUNT_LOCKED), including unknown emails."
+          }
+        },
+        {
+          "name": "Refresh",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const json = pm.response.json();",
+                  "pm.test('200 ok', () => pm.response.to.have.status(200));",
+                  "if (json.success && json.data) pm.environment.set('accessToken', json.data.accessToken);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "POST",
+            "url": "{{baseUrl}}/api/v1/auth/refresh",
+            "description": "Uses the HttpOnly refresh cookie, rotates it and returns a new access token. Reusing a rotated/revoked token revokes every session for that user."
+          }
+        },
+        {
+          "name": "Logout",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 ok', () => pm.response.to.have.status(200));",
+                  "pm.environment.set('accessToken', '');"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "POST",
+            "url": "{{baseUrl}}/api/v1/auth/logout",
+            "description": "Revokes only the current refresh session and clears the cookie."
+          }
+        },
+        {
+          "name": "Google OAuth — start",
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "GET",
+            "url": "{{baseUrl}}/api/v1/auth/google",
+            "description": "302 to Google consent. Answers 404 NOT_FOUND when GOOGLE_CLIENT_ID/SECRET are unset. Open in a browser and disable 'Automatically follow redirects' to inspect."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Users & data control",
+      "item": [
+        {
+          "name": "Get me",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/api/v1/users/me",
+            "description": "Current profile plus GitHub PAT status — only { connected, hint, scopes, updatedAt }, never the token."
+          }
+        },
+        {
+          "name": "List sessions",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const json = pm.response.json();",
+                  "if (json.success && json.data && Array.isArray(json.data.sessions)) {",
+                  "  const other = json.data.sessions.find((s) => !s.current) || json.data.sessions[0];",
+                  "  if (other) pm.environment.set('sessionId', other.id);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/api/v1/users/me/sessions",
+            "description": "Active refresh sessions with a `current` flag and user agent — no token material. Saves sessionId."
+          }
+        },
+        {
+          "name": "Revoke one session",
+          "request": {
+            "method": "DELETE",
+            "url": "{{baseUrl}}/api/v1/users/me/sessions/{{sessionId}}",
+            "description": "Revokes a single session by id (404 when unknown or owned by someone else)."
+          }
+        },
+        {
+          "name": "Revoke all sessions",
+          "request": {
+            "method": "DELETE",
+            "url": "{{baseUrl}}/api/v1/users/me/sessions",
+            "description": "Sign out everywhere — clears every refresh token and the cookie."
+          }
+        },
+        {
+          "name": "Export my data (GDPR)",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/api/v1/users/me/export",
+            "description": "JSON attachment with profile, repos, analyses, saved views and pins. Never contains tokens, password hashes or refresh sessions."
+          }
+        },
+        {
+          "name": "Connect GitHub PAT",
+          "request": {
+            "method": "PUT",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"token\": \"{{githubToken}}\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": "{{baseUrl}}/api/v1/users/me/github-token",
+            "description": "Verifies the PAT against GitHub, then stores it AES-256-GCM encrypted. Requires a real token (ghp_… or github_pat_…)."
+          }
+        },
+        {
+          "name": "Remove GitHub PAT",
+          "request": {
+            "method": "DELETE",
+            "url": "{{baseUrl}}/api/v1/users/me/github-token",
+            "description": "Forgets the stored PAT; private repos become inaccessible."
+          }
+        },
+        {
+          "name": "DELETE my account",
+          "request": {
+            "method": "DELETE",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"confirmation\": \"DELETE MY ACCOUNT\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": "{{baseUrl}}/api/v1/users/me",
+            "description": "DESTRUCTIVE. Hard-deletes the account and every derived record (repos, analyses, graph, embeddings, AI cache, views, pins, login counters) and cancels queued analyses."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Repos",
+      "item": [
+        {
+          "name": "Register repo",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const json = pm.response.json();",
+                  "pm.test('202 accepted', () => pm.response.to.have.status(202));",
+                  "if (json.success && json.data) {",
+                  "  if (json.data.repo) pm.environment.set('repoId', json.data.repo.id);",
+                  "  if (json.data.analysis) pm.environment.set('analysisId', json.data.analysis.id);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"url\": \"{{repoUrl}}\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": "{{baseUrl}}/api/v1/repos",
+            "description": "Queues an analysis (202). Saves repoId and analysisId. Private repos need a connected PAT."
+          }
+        },
+        {
+          "name": "List repos",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/api/v1/repos?page=1&limit=20",
+            "description": "Paginated repo list."
+          }
+        },
+        {
+          "name": "Get repo",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/api/v1/repos/{{repoId}}"
+          }
+        },
+        {
+          "name": "List analyses",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/api/v1/repos/{{repoId}}/analyses?page=1&limit=20",
+            "description": "Analysis history, newest first."
+          }
+        },
+        {
+          "name": "Refresh analysis",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const json = pm.response.json();",
+                  "if (json.success && json.data && json.data.analysis) pm.environment.set('analysisId', json.data.analysis.id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "url": "{{baseUrl}}/api/v1/repos/{{repoId}}/refresh",
+            "description": "Re-runs analysis (202) or answers 409 ANALYSIS_IN_PROGRESS. Diff-aware: unchanged files are reused."
+          }
+        },
+        {
+          "name": "Delete repo",
+          "request": {
+            "method": "DELETE",
+            "url": "{{baseUrl}}/api/v1/repos/{{repoId}}",
+            "description": "Soft-deletes the repo and its analyses."
+          }
+        }
+      ]
+    },
+    {
+      "name": "GitHub discovery",
+      "item": [
+        {
+          "name": "Search repositories",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/api/v1/github/repos?q=react&limit=10",
+            "description": "Searches GitHub repository metadata for the repo picker. Provide q, owner, or both (400 INVALID_REQUEST otherwise). A connected PAT is used automatically."
+          }
+        },
+        {
+          "name": "List owner repositories",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/api/v1/github/repos?owner=facebook&limit=10",
+            "description": "Discovers repositories for a GitHub owner, sorted by stars."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Workspace — views",
+      "item": [
+        {
+          "name": "Create view",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const json = pm.response.json();",
+                  "pm.test('201 created', () => pm.response.to.have.status(201));",
+                  "if (json.success && json.data && json.data.view) pm.environment.set('viewId', json.data.view.id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Critical path\",\n  \"description\": \"Focus on the main entry point\",\n  \"state\": {\n    \"level\": \"file\",\n    \"searchQuery\": \"index\",\n    \"focusNode\": \"file:index.js\",\n    \"highlightedNodes\": [\"file:index.js\"],\n    \"filterKinds\": [\"file\"]\n  },\n  \"isPinned\": true\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": "{{baseUrl}}/api/v1/repos/{{repoId}}/views",
+            "description": "Persists map state for this repo. Names are unique per repo (409 CONFLICT). Saves viewId."
+          }
+        },
+        {
+          "name": "List views",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/api/v1/repos/{{repoId}}/views",
+            "description": "Owner-scoped, pinned first."
+          }
+        },
+        {
+          "name": "Get view",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/api/v1/workspace/views/{{viewId}}"
+          }
+        },
+        {
+          "name": "Update view",
+          "request": {
+            "method": "PATCH",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"isPinned\": false,\n  \"state\": {\n    \"focusNode\": \"file:index.js\",\n    \"highlightedNodes\": [\"file:index.js\", \"file:lib/application.js\"]\n  }\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": "{{baseUrl}}/api/v1/workspace/views/{{viewId}}",
+            "description": "Partial update — omitted state fields are preserved, not reset."
+          }
+        },
+        {
+          "name": "Delete view",
+          "request": {
+            "method": "DELETE",
+            "url": "{{baseUrl}}/api/v1/workspace/views/{{viewId}}"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Workspace — pins & report",
+      "item": [
+        {
+          "name": "Create pin",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const json = pm.response.json();",
+                  "pm.test('201 created', () => pm.response.to.have.status(201));",
+                  "if (json.success && json.data && json.data.pin) pm.environment.set('pinId', json.data.pin.id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"nodeKey\": \"file:index.js\",\n  \"note\": \"High-risk cycle member\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": "{{baseUrl}}/api/v1/analyses/{{analysisId}}/pins",
+            "description": "Pins a node from this completed analysis (404 NODE_NOT_FOUND when it is not in the graph). Saves pinId."
+          }
+        },
+        {
+          "name": "List pins",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/api/v1/analyses/{{analysisId}}/pins"
+          }
+        },
+        {
+          "name": "Update pin",
+          "request": {
+            "method": "PATCH",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"note\": \"Reviewed — acceptable for now\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": "{{baseUrl}}/api/v1/workspace/pins/{{pinId}}"
+          }
+        },
+        {
+          "name": "Delete pin",
+          "request": {
+            "method": "DELETE",
+            "url": "{{baseUrl}}/api/v1/workspace/pins/{{pinId}}"
+          }
+        },
+        {
+          "name": "Report (JSON)",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/api/v1/analyses/{{analysisId}}/report?format=json",
+            "description": "Structured report: repo metadata, commit SHA, health, hotspots, cycles and pins."
+          }
+        },
+        {
+          "name": "Report (Markdown)",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/api/v1/analyses/{{analysisId}}/report?format=markdown",
+            "description": "text/markdown attachment."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Analysis & graph",
+      "item": [
+        {
+          "name": "Poll analysis",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/api/v1/analyses/{{analysisId}}",
+            "description": "Status/progress; terminal states are done | failed."
+          }
+        },
+        {
+          "name": "Get graph (file level)",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/api/v1/graph/{{analysisId}}?level=file",
+            "description": "Nodes + edges for the map at file level."
+          }
+        },
+        {
+          "name": "Get graph (symbol level)",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/api/v1/graph/{{analysisId}}?level=symbol"
+          }
+        },
+        {
+          "name": "Graph file tree",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/api/v1/graph/{{analysisId}}/tree",
+            "description": "Nested file tree with LOC, fan-in/out and symbol counts."
+          }
+        },
+        {
+          "name": "Graph node inspector",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/api/v1/graph/{{analysisId}}/node?node=file:index.js",
+            "description": "One node plus incoming/outgoing neighbours with edge kinds. Adjust the node key to your graph."
+          }
+        },
+        {
+          "name": "Graph callers",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/api/v1/graph/{{analysisId}}/callers?node=file:index.js&depth=3",
+            "description": "Reverse caller traversal (depth 1–5). Symbol keys follow calls edges; file keys follow calls + imports."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Insights",
+      "item": [
+        {
+          "name": "Circular dependencies",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/api/v1/insights/{{analysisId}}/cycles",
+            "description": "Tarjan SCC cycles with severity."
+          }
+        },
+        {
+          "name": "Health",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/api/v1/insights/{{analysisId}}/health",
+            "description": "Per-file scores, hotspots and the repo score."
+          }
+        },
+        {
+          "name": "Impact analysis",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/api/v1/insights/{{analysisId}}/impact?node=file:index.js",
+            "description": "Transitively affected files (dependents) if this node changes, plus fan-in/out and the deepest critical path. Adjust the node key to a file in your graph."
+          }
+        },
+        {
+          "name": "Impact — dependencies",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/api/v1/insights/{{analysisId}}/impact?node=file:index.js&direction=dependencies",
+            "description": "Forward traversal: everything this node transitively relies on."
+          }
+        }
+      ]
+    },
+    {
+      "name": "AI",
+      "item": [
+        {
+          "name": "Explain node",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"node\": \"file:index.js\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": "{{baseUrl}}/api/v1/ai/analyses/{{analysisId}}/explain",
+            "description": "Grounded explanation (summary, keyPoints, potentialIssues) plus source.text — the redacted excerpt the model saw. Cached per (analysis, node); 503 AI_NOT_CONFIGURED without ANTHROPIC_API_KEY."
+          }
+        },
+        {
+          "name": "Smart search",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"query\": \"where is authentication handled?\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": "{{baseUrl}}/api/v1/ai/analyses/{{analysisId}}/search",
+            "description": "Keyword + optional semantic retrieval with LLM synthesis. Falls back to keyword ranking when embeddings are disabled."
+          }
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,12 @@
+# Mirror sensitive paths so they are NOT indexed into AI context (blueprint Section 9)
+.env
+.env.*
+!.env.example
+node_modules/
+dist/
+build/
+coverage/
+*.pem
+*.key
+# Analyzer temp workspace contains cloned third-party source — never index
+tmp/

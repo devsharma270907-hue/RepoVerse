@@ -1,0 +1,20 @@
+{
+  "id": "0e5f3a7c-2b14-4c88-9f60-5d3a1b8e42cd",
+  "name": "RepoVerse — Local",
+  "values": [
+    { "key": "baseUrl", "value": "http://localhost:5000", "type": "default", "enabled": true },
+    { "key": "name", "value": "RepoVerse Tester", "type": "default", "enabled": true },
+    { "key": "email", "value": "tester+repoverse@example.com", "type": "default", "enabled": true },
+    { "key": "password", "value": "supersecret123", "type": "secret", "enabled": true },
+    { "key": "repoUrl", "value": "https://github.com/expressjs/express", "type": "default", "enabled": true },
+    { "key": "githubToken", "value": "", "type": "secret", "enabled": true },
+    { "key": "accessToken", "value": "", "type": "secret", "enabled": true },
+    { "key": "userId", "value": "", "type": "default", "enabled": true },
+    { "key": "repoId", "value": "", "type": "default", "enabled": true },
+    { "key": "analysisId", "value": "", "type": "default", "enabled": true },
+    { "key": "viewId", "value": "", "type": "default", "enabled": true },
+    { "key": "pinId", "value": "", "type": "default", "enabled": true },
+    { "key": "sessionId", "value": "", "type": "default", "enabled": true }
+  ],
+  "_postman_variable_scope": "environment"
+}
