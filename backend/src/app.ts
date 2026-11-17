@@ -43,7 +43,7 @@ app.use(
   cors({
     origin: env.CORS_ORIGINS.split(',').map((o) => o.trim()),
     credentials: true,
-    methods: ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'],
+    methods: ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
   })
 );
 
