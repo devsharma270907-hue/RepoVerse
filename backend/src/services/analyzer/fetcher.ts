@@ -13,8 +13,7 @@ import { simpleGit } from 'simple-git';
  */
 const GITHUB_API = 'https://api.github.com';
 
-function apiHeaders(token?: string): Record<string, string> {
-  const bearer = token ?? env.GITHUB_TOKEN;
+function apiHeaders(bearer?: string): Record<string, string> {
   return {
     Accept: 'application/vnd.github+json',
     'X-GitHub-Api-Version': '2022-11-28',
@@ -23,39 +22,100 @@ function apiHeaders(token?: string): Record<string, string> {
   };
 }
 
-async function ghFetch<T>(path: string, token?: string): Promise<T> {
-  let res: Response;
-  try {
-    res = await fetch(`${GITHUB_API}${path}`, {
-      headers: apiHeaders(token),
-      signal: AbortSignal.timeout(15_000),
-    });
-  } catch (err) {
-    logger.warn(
-      'GitHub API unreachable',
-      err instanceof Error ? err : new Error(String(err))
-    );
-    throw new AppError(503, 'GITHUB_UNAVAILABLE', 'GitHub API is unreachable');
+/**
+ * Credentials to try, most specific first.
+ *
+ * A user-supplied PAT must never be able to make a PUBLIC repo unreadable: a
+ * fine-grained token scoped to the owner's own repositories returns 404 for
+ * everyone else's code, and an expired/revoked one returns 401. Both used to
+ * abort the request outright. Falling back to the server token and finally to
+ * an anonymous read keeps public ingestion working in those cases, while a
+ * private repo still fails closed (anonymous → 404).
+ */
+function tokenCandidates(token?: string): Array<string | undefined> {
+  const candidates: Array<string | undefined> = [];
+  if (token) candidates.push(token);
+  if (env.GITHUB_TOKEN && env.GITHUB_TOKEN !== token) {
+    candidates.push(env.GITHUB_TOKEN);
   }
+  if (candidates.length > 0) candidates.push(undefined);
+  return candidates.length > 0 ? candidates : [undefined];
+}
 
-  if (res.status === 404 || res.status === 401) {
-    throw new AppError(
+function ghError(status: number): AppError {
+  if (status === 404 || status === 401) {
+    return new AppError(
       422,
       'REPO_NOT_ACCESSIBLE',
       'Repository not found, or private without a GitHub token with access'
     );
   }
-  if (res.status === 403) {
-    throw new AppError(
+  if (status === 403) {
+    return new AppError(
       422,
       'REPO_NOT_ACCESSIBLE',
       'GitHub API rate limit reached — try again later, or connect a GitHub token'
     );
   }
-  if (!res.ok) {
-    throw new AppError(502, 'GITHUB_ERROR', `GitHub API error (${res.status})`);
+  return new AppError(502, 'GITHUB_ERROR', `GitHub API error (${status})`);
+}
+
+/**
+ * A 403 is ambiguous: it is both the quota response and GitHub's answer for a
+ * token that exists but lacks permission. The quota one is identifiable from
+ * the rate-limit headers/body, and the distinction decides whether the user
+ * needs to wait, or needs a different token.
+ */
+async function errorFor(res: Response): Promise<AppError> {
+  if (res.status !== 403) return ghError(res.status);
+
+  const remaining = res.headers.get('x-ratelimit-remaining');
+  let body = '';
+  try {
+    body = (await res.text()).slice(0, 400);
+  } catch {
+    // Body already consumed or unreadable — fall back to the headers.
   }
-  return (await res.json()) as T;
+
+  if (remaining === '0' || /rate limit|abuse detection/i.test(body)) {
+    return ghError(403);
+  }
+  return new AppError(
+    422,
+    'REPO_NOT_ACCESSIBLE',
+    'GitHub denied access — the token is not valid or lacks permission for this repository'
+  );
+}
+
+async function ghFetch<T>(path: string, token?: string): Promise<T> {
+  // Only credential problems are retried; a 5xx or malformed response is final.
+  let denied: AppError | null = null;
+
+  for (const bearer of tokenCandidates(token)) {
+    let res: Response;
+    try {
+      res = await fetch(`${GITHUB_API}${path}`, {
+        headers: apiHeaders(bearer),
+        signal: AbortSignal.timeout(15_000),
+      });
+    } catch (err) {
+      logger.warn(
+        'GitHub API unreachable',
+        err instanceof Error ? err : new Error(String(err))
+      );
+      throw new AppError(503, 'GITHUB_UNAVAILABLE', 'GitHub API is unreachable');
+    }
+
+    if (res.ok) return (await res.json()) as T;
+
+    if (res.status === 401 || res.status === 403 || res.status === 404) {
+      denied = await errorFor(res);
+      continue;
+    }
+    throw await errorFor(res);
+  }
+
+  throw denied ?? new AppError(502, 'GITHUB_ERROR', 'GitHub API error');
 }
 
 /** A repository surfaced by discovery — metadata only, never content. */
@@ -232,31 +292,49 @@ export async function fetchFileContent(
   }
 
   const encodedPath = posix.split('/').map(encodeURIComponent).join('/');
-  // Authenticated reads go through the contents API (raw.github 404s for
-  // private repos); public reads keep using the cheaper raw endpoint.
-  const url = token
-    ? `${GITHUB_API}/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/contents/${encodedPath}?ref=${encodeURIComponent(ref)}`
-    : `https://raw.githubusercontent.com/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/${encodeURIComponent(ref)}/${encodedPath}`;
 
+  // Same credential ladder as ghFetch: a connected PAT that cannot read this
+  // repo must not make public source unreadable.
+  let denied: AppError | null = null;
   try {
-    const res = await fetch(url, {
-      headers: {
-        'User-Agent': 'RepoVerse-Analyzer',
-        ...(token ? { Accept: 'application/vnd.github.raw', Authorization: `Bearer ${token}` } : {}),
-      },
-      signal: AbortSignal.timeout(15_000),
-    });
-    if (res.status === 404) {
-      throw new AppError(
-        404,
-        'NODE_SOURCE_MISSING',
-        'Source file no longer exists in the analyzed commit'
-      );
-    }
-    if (!res.ok) {
+    for (const bearer of tokenCandidates(token)) {
+      // Authenticated reads go through the contents API (raw.github 404s for
+      // private repos); public reads keep using the cheaper raw endpoint.
+      const url = bearer
+        ? `${GITHUB_API}/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/contents/${encodedPath}?ref=${encodeURIComponent(ref)}`
+        : `https://raw.githubusercontent.com/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/${encodeURIComponent(ref)}/${encodedPath}`;
+
+      const res = await fetch(url, {
+        headers: {
+          'User-Agent': 'RepoVerse-Analyzer',
+          ...(bearer
+            ? { Accept: 'application/vnd.github.raw', Authorization: `Bearer ${bearer}` }
+            : {}),
+        },
+        signal: AbortSignal.timeout(15_000),
+      });
+
+      if (res.ok) return await res.text();
+
+      if (bearer && (res.status === 401 || res.status === 403 || res.status === 404)) {
+        denied = new AppError(
+          404,
+          'NODE_SOURCE_MISSING',
+          'Source file no longer exists in the analyzed commit'
+        );
+        continue;
+      }
+      if (res.status === 404) {
+        throw new AppError(
+          404,
+          'NODE_SOURCE_MISSING',
+          'Source file no longer exists in the analyzed commit'
+        );
+      }
       throw new AppError(502, 'GITHUB_ERROR', `GitHub raw fetch error (${res.status})`);
     }
-    return await res.text();
+
+    throw denied ?? new AppError(502, 'GITHUB_ERROR', 'GitHub raw fetch failed');
   } catch (err) {
     if (err instanceof AppError) throw err;
     logger.warn(
@@ -290,22 +368,23 @@ export async function cloneRepo(
   const dir = path.join(tmpRoot, `${owner}-${name}-${unique}`);
   const url = `https://github.com/${owner}/${name}.git`;
 
-  let git = simpleGit({
-    timeout: { block: env.ANALYSIS_TIMEOUT_SECONDS * 1000 },
-  });
+  const runClone = async (bearer?: string): Promise<string> => {
+    // Never let git block on an interactive credential prompt: this runs
+    // headless, so a missing prompt would hang until the time budget expires.
+    let git = simpleGit({
+      timeout: { block: env.ANALYSIS_TIMEOUT_SECONDS * 1000 },
+    }).env('GIT_TERMINAL_PROMPT', '0');
 
-  if (token) {
-    // Private-repo auth WITHOUT putting the token in argv (visible to `ps`).
-    // `http.extraheader` is passed through GIT_CONFIG_* env vars instead.
-    const basic = Buffer.from(`x-access-token:${token}`).toString('base64');
-    git = git
-      .env('GIT_TERMINAL_PROMPT', '0')
-      .env('GIT_CONFIG_COUNT', '1')
-      .env('GIT_CONFIG_KEY_0', 'http.extraheader')
-      .env('GIT_CONFIG_VALUE_0', `AUTHORIZATION: basic ${basic}`);
-  }
+    if (bearer) {
+      // Private-repo auth WITHOUT putting the token in argv (visible to `ps`).
+      // `http.extraheader` is passed through GIT_CONFIG_* env vars instead.
+      const basic = Buffer.from(`x-access-token:${bearer}`).toString('base64');
+      git = git
+        .env('GIT_CONFIG_COUNT', '1')
+        .env('GIT_CONFIG_KEY_0', 'http.extraheader')
+        .env('GIT_CONFIG_VALUE_0', `AUTHORIZATION: basic ${basic}`);
+    }
 
-  try {
     await git.clone(url, dir, [
       '--depth',
       '1',
@@ -315,7 +394,33 @@ export async function cloneRepo(
       '--no-tags',
     ]);
     const log = await git.cwd(dir).log({ maxCount: 1 });
-    const commitSha = log.latest?.hash ?? '';
+    return log.latest?.hash ?? '';
+  };
+
+  try {
+    let commitSha = '';
+    try {
+      commitSha = await runClone(token ?? env.GITHUB_TOKEN);
+    } catch (err) {
+      // Git credentials override the URL, so a connected PAT that cannot read
+      // this repo (fine-grained scoped elsewhere, revoked, expired) turns a
+      // public clone into a hard failure. Retry anonymously before giving up —
+      // a private repo simply fails again, which is the correct outcome.
+      const message = err instanceof Error ? err.message : String(err);
+      const credentialFailure =
+        /authentication|403|401|not found|could not read|invalid username or password/i.test(
+          message
+        );
+      if (!credentialFailure) throw err;
+
+      fs.rmSync(dir, { recursive: true, force: true });
+      logger.warn(
+        'Clone rejected the stored credential — retrying anonymously',
+        err instanceof Error ? err : new Error(String(err))
+      );
+      commitSha = await runClone();
+    }
+
     if (!commitSha) {
       throw new AppError(422, 'REPO_UNSUPPORTED_LANGUAGE', 'Repository has no commits');
     }
